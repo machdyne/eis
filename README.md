@@ -12,11 +12,11 @@ Find more information on the [Eis product page](https://machdyne.com/product/eis
 
 Building the blinky example requires [Yosys](https://github.com/YosysHQ/yosys), [nextpnr-ice40](https://github.com/YosysHQ/nextpnr) and [IceStorm](https://github.com/YosysHQ/icestorm).
 
-Assuming they are installed, you can simply type `make` to build the gateware, which will be written to output/blinky.bin. You can then connect the Micro-USB port to your computer and use the latest version of [ldprog](https://github.com/machdyne/ldprog) to write the gateware to the device.
+Assuming they are installed, you can simply type `make` to build the gateware, which will be written to output/blinky.bin. You can then connect the USB-C port to your computer and use the latest version of [ldprog](https://github.com/machdyne/ldprog) to write the gateware to the device.
 
 ## Programming
 
-The RP2040 firmware, FPGA SRAM and flash MMOD can be programmed over the Micro-USB port.
+The RP2040 firmware, FPGA SRAM and flash MMOD can be programmed over the USB-C port.
 
 Configure the FPGA SRAM:
 
