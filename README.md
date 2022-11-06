@@ -2,6 +2,8 @@
 
 Eis is a small FPGA computer designed by Lone Dynamics Corporation.
 
+![Eis Computer](https://github.com/machdyne/eis/blob/88b2240afcf820420434226afd51348e94bad919/eis.png)
+
 This repo contains schematics, pinouts, example firmware, gateware and documentation.
 
 Find more information on the [Eis product page](https://machdyne.com/product/eis-computer/).
