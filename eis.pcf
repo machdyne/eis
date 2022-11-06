@@ -1,0 +1,112 @@
+# Eis V0
+# ------
+
+set_io CLK_48	L5		# this is CLK_RP
+
+set_io LED_A	G3
+
+# PMOD_A
+set_io PMOD_A1  L4
+set_io PMOD_A2  L1
+set_io PMOD_A3  K3
+set_io PMOD_A4  J4
+set_io PMOD_A7  L3
+set_io PMOD_A8  K5
+set_io PMOD_A9  K4
+set_io PMOD_A10 J3
+
+# UART on PMODA
+set_io UART0_RTS  L4
+set_io UART0_RX   L1
+set_io UART0_TX   K3
+set_io UART0_CTS  J4
+
+# --
+
+# DDMI
+set_io DDMI_D0_P	H2
+set_io DDMI_D0_N	H1
+set_io DDMI_D1_P	J2
+set_io DDMI_D1_N	J1
+set_io DDMI_D2_P	K2
+set_io DDMI_D2_N	K1
+set_io DDMI_CK_P	G2
+set_io DDMI_CK_N	G1
+
+# RP2040
+set_io RP_INT		K7
+set_io RP_TX		L7
+set_io RP_RX		L8
+
+# MMOD/SD SPI BUS
+set_io SPI_SS_FLASH  K10
+set_io SPI_SS_SD		J8
+set_io SPI_SS_RP		J7
+set_io SPI_SCK       L10
+set_io SPI_MISO      J9		# CSPI_SI
+set_io SPI_MOSI      K9		# CSPI_SO
+
+# STATIC RAM
+set_io SRAM_A0		C1
+set_io SRAM_A1		D1
+set_io SRAM_A2		E1
+set_io SRAM_A3		C2
+set_io SRAM_A4		D2
+set_io SRAM_A5		C4
+set_io SRAM_A6		C3
+set_io SRAM_A7		C7
+set_io SRAM_A8		A7
+set_io SRAM_A9		A8
+set_io SRAM_A10	A9
+set_io SRAM_A11	A10
+set_io SRAM_A12	B7
+set_io SRAM_A13	B8
+set_io SRAM_A14	B6
+set_io SRAM_A15	B9
+set_io SRAM_A16	C8
+set_io SRAM_A17	C9
+
+set_io SRAM0_D0		E3
+set_io SRAM0_D1		F1
+set_io SRAM0_D2		F2
+set_io SRAM0_D3		F3
+set_io SRAM0_D4		D7
+set_io SRAM0_D5		E2
+set_io SRAM0_D6		A11
+set_io SRAM0_D7		F4
+set_io SRAM0_D8		A2
+set_io SRAM0_D9		A3
+set_io SRAM0_D10	B3
+set_io SRAM0_D11	A4
+set_io SRAM0_D12	B4
+set_io SRAM0_D13	B5
+set_io SRAM0_D14	A5
+set_io SRAM0_D15	A6
+
+set_io SRAM0_CE		D3
+set_io SRAM0_WE		D5
+set_io SRAM0_OE		B1
+set_io SRAM0_LB		A1
+set_io SRAM0_UB		B2
+
+# OPI PSRAM
+set_io HRAM_ADQ0	J11
+set_io HRAM_ADQ1	G10
+set_io HRAM_ADQ2	G9
+set_io HRAM_ADQ3	H10
+set_io HRAM_ADQ4	F9
+set_io HRAM_ADQ5	K11
+set_io HRAM_ADQ6	J10
+set_io HRAM_ADQ7	G11
+set_io HRAM_DQ8	F10
+set_io HRAM_DQ9	E11
+set_io HRAM_DQ10	D11
+set_io HRAM_DQ11	C11
+set_io HRAM_DQ12	B11
+set_io HRAM_DQ13	E8
+set_io HRAM_DQ14	D9
+set_io HRAM_DQ15	H11
+set_io HRAM_DQS0	F11
+set_io HRAM_DQS1	E9
+set_io HRAM_CK		E10
+set_io HRAM_CE		D10
