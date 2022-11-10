@@ -40,9 +40,9 @@ The system clock (CLK\_RP) is 48MHz by default.
 
 The firmware can be updated by holding down the BOOTSEL button, connecting the USB-C port to your computer, and then dragging and dropping a new UF2 file to the device filesystem.
 
-## Zucker
+## SOC
 
-[Zucker](https://github.com/machdyne/zucker) is a RISC-V SOC that supports Eis.
+[Zucker](https://github.com/machdyne/zucker) is an experimental RISC-V SOC that supports Eis.
 
 ## Pinouts
 
