@@ -1,39 +1,68 @@
 /**
  * Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+ * Copyright (c) 2021 Ha Thach (tinyusb.org)
  * Copyright (c) 2022 Lone Dynamics Corporation <info@lonedynamics.com>
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * Keks Firmware (work-in-progress)
+ * Eis Firmware (work-in-progress)
  *
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <strings.h>
-#include <string.h>
 
+// Pico
 #include "pico/stdlib.h"
-#include "pico/stdio.h"
-#include "hardware/uart.h"
 #include "hardware/spi.h"
-#include "hardware/pio.h"
 #include "hardware/watchdog.h"
+#include "pico/stdlib.h"
+#include "pico/binary_info.h"
+#include "pico/multicore.h"
+
 #include "hardware/pll.h"
 #include "hardware/clocks.h"
 #include "hardware/structs/pll.h"
 #include "hardware/structs/clocks.h"
-#include "pico/stdlib.h"
-#include "pico/binary_info.h"
-#include "pico/multicore.h"
-#include "pico/bootrom.h"
 
+#include "pio_spi.h"
 #include "pio_usb.h"
-#include "spi_slave_tx.pio.h"
-#include "spi_slave_rx.pio.h"
+#include "tusb.h"
 #include "spi_master_tx.pio.h"
 #include "eis.h"
-#include "fs.h"
+#include "keycode2scancode.h"
+
+uint8_t spi_mode = SPI_MODE_HW;
+
+void core1_main(void);
+
+void init_ldprog(void);
+void init_gpio(void);
+void init_pio_spi(void);
+void init_eis(void);
+void init_eis_postconf(void);
+void pio_spi_cfg(uint8_t pin_sck, uint8_t pin_mosi, uint8_t pin_miso);
+
+static usb_device_t *usb_host_device = NULL;
+
+uint8_t spi_pio_offset;
+
+bool eis_fpga_configured = false;
+
+pio_spi_inst_t spi_pio = {
+	.pio = pio0,
+	.sm = 1
+};
+
+#define SPI_MASTER_TX_PIO pio0
+#define SPI_MASTER_TX_SM 2
+
+void pio_spi_master_tx_write8_blocking(PIO pio, uint sm, const uint8_t *src, size_t len);
+static void process_kbd_report(hid_keyboard_report_t const *report);
+void spi_send_scancode(uint8_t code);
+
+// For memcpy
+#include <string.h>
 
 // Include descriptor struct definitions
 #include "usb_common.h"
@@ -47,29 +76,6 @@
 #include "hardware/resets.h"
 
 // Device descriptors
-#include "eis_usb.h"
-
-// spi_master and spi_slave PIO is shared with pico-pio-usb
-#define SPI_SLAVE_RX_PIO pio0
-#define SPI_SLAVE_RX_SM 1
-#define SPI_SLAVE_TX_PIO pio0
-#define SPI_SLAVE_TX_SM 2
-#define SPI_MASTER_TX_PIO pio0
-#define SPI_MASTER_TX_SM 3
-
-void pio_spi_slave_write8_blocking(PIO pio, uint sm, const uint8_t *src, size_t len);
-void pio_spi_master_write8_blocking(PIO pio, uint sm, const uint8_t *src, size_t len);
-
-void init_ldprog(void);
-void init_eis(void);
-void init_eis_postconf(void);
-int rptcmp(char *a, char *b, int len);
-void gpio_int(uint gpio, uint32_t events);
-void core1_main();
-
-bool eis_fpga_configured = false;
-
-static usb_device_t *usb_host_device = NULL;
 
 #define usb_hw_set hw_set_alias(usb_hw)
 #define usb_hw_clear hw_clear_alias(usb_hw)
@@ -192,7 +198,7 @@ static inline uint32_t usb_buffer_offset(volatile uint8_t *buf) {
  * @param ep
  */
 void usb_setup_endpoint(const struct usb_endpoint_configuration *ep) {
-    printf("Set up endpoint 0x%x with buffer address 0x%p\n", ep->descriptor->bEndpointAddress, ep->data_buffer);
+    //printf("Set up endpoint 0x%x with buffer address 0x%p\n", ep->descriptor->bEndpointAddress, ep->data_buffer);
 
     // EP0 doesn't have one so return if that is the case
     if (!ep->endpoint_control) {
@@ -403,7 +409,7 @@ void usb_set_device_address(volatile struct usb_setup_packet *pkt) {
     // Set address is a bit of a strange case because we have to send a 0 length status packet first with
     // address 0
     dev_addr = (pkt->wValue & 0xff);
-    printf("Set address %d\r\n", dev_addr);
+    //printf("Set address %d\r\n", dev_addr);
     // Will set address in the callback phase
     should_set_address = true;
     usb_acknowledge_out_request();
@@ -417,7 +423,7 @@ void usb_set_device_address(volatile struct usb_setup_packet *pkt) {
  */
 void usb_set_device_configuration(volatile struct usb_setup_packet *pkt) {
     // Only one configuration so just acknowledge the request
-    printf("Device Enumerated\r\n");
+    //printf("Device Enumerated\r\n");
     usb_acknowledge_out_request();
     configured = true;
 }
@@ -441,7 +447,7 @@ void usb_handle_setup_packet(void) {
             usb_set_device_configuration(pkt);
         } else {
             usb_acknowledge_out_request();
-            printf("Other OUT request (0x%x)\r\n", pkt->bRequest);
+            //printf("Other OUT request (0x%x)\r\n", pkt->bRequest);
         }
     } else if (req_direction == USB_DIR_IN) {
         if (req == USB_REQUEST_GET_DESCRIPTOR) {
@@ -450,24 +456,24 @@ void usb_handle_setup_packet(void) {
             switch (descriptor_type) {
                 case USB_DT_DEVICE:
                     usb_handle_device_descriptor();
-                    printf("GET DEVICE DESCRIPTOR\r\n");
+                    //printf("GET DEVICE DESCRIPTOR\r\n");
                     break;
 
                 case USB_DT_CONFIG:
                     usb_handle_config_descriptor(pkt);
-                    printf("GET CONFIG DESCRIPTOR\r\n");
+                    //printf("GET CONFIG DESCRIPTOR\r\n");
                     break;
 
                 case USB_DT_STRING:
                     usb_handle_string_descriptor(pkt);
-                    printf("GET STRING DESCRIPTOR\r\n");
+                    //printf("GET STRING DESCRIPTOR\r\n");
                     break;
 
-                default:
-                    printf("Unhandled GET_DESCRIPTOR type 0x%x\r\n", descriptor_type);
+                //default:
+                    //printf("Unhandled GET_DESCRIPTOR type 0x%x\r\n", descriptor_type);
             }
         } else {
-            printf("Other IN request (0x%x)\r\n", pkt->bRequest);
+            //printf("Other IN request (0x%x)\r\n", pkt->bRequest);
         }
     }
 }
@@ -555,15 +561,15 @@ void isr_usbctrl(void) {
 
     // Bus is reset
     if (status & USB_INTS_BUS_RESET_BITS) {
-        printf("BUS RESET\n");
+        //printf("BUS RESET\n");
         handled |= USB_INTS_BUS_RESET_BITS;
         usb_hw_clear->sie_status = USB_SIE_STATUS_BUS_RESET_BITS;
         usb_bus_reset();
     }
 
-    if (status ^ handled) {
-        panic("Unhandled IRQ 0x%x\n", (uint) (status ^ handled));
-    }
+//    if (status ^ handled) {
+//        panic("Unhandled IRQ 0x%x\n", (uint) (status ^ handled));
+//    }
 }
 
 /**
@@ -591,8 +597,15 @@ void ep0_out_handler(uint8_t *buf, uint16_t len) {
 // Device specific functions
 void ep1_out_handler(uint8_t *buf, uint16_t len) {
 
+	//	printf("RX %d bytes from host\n", len);
+	//	printf("[%x %x %x %x]\n", buf[0], buf[1], buf[2], buf[3]);
+
 	if (buf[0] == MUSLI_CMD_INIT) {
+		//printf("init %d\n", buf[1]);
 		if (buf[1] == 0x00) init_ldprog();
+		if (buf[1] == 0x01) init_gpio();
+		if (buf[1] == 0x02) init_pio_spi();
+		if (buf[1] == 0x03) init_eis();
 	}
 
 	if (buf[0] == MUSLI_CMD_GPIO_SET_DIR) {
@@ -615,8 +628,6 @@ void ep1_out_handler(uint8_t *buf, uint16_t len) {
 		uint8_t lbuf[64];
 		bzero(lbuf, 64);
 		uint8_t val = gpio_get(buf[1]);
-		int pd = gpio_is_pulled_down(buf[1]);
-		int pu = gpio_is_pulled_up(buf[1]);
 		lbuf[0] = val;
 		struct usb_endpoint_configuration *ep =
 			usb_get_endpoint_configuration(EP2_IN_ADDR);
@@ -624,26 +635,36 @@ void ep1_out_handler(uint8_t *buf, uint16_t len) {
 	}
 
 	if (buf[0] == MUSLI_CMD_GPIO_PUT) {
-		int pd = gpio_is_pulled_down(buf[1]);
-		int pu = gpio_is_pulled_up(buf[1]);
 		gpio_put(buf[1], buf[2]);
 	}
 
 	if (buf[0] == MUSLI_CMD_SPI_READ) {
 		uint8_t lbuf[64];
 		bzero(lbuf, 64);
-		spi_read_blocking(spi1, 0, lbuf, buf[1]);
+	//	printf("reading %d bytes from spi [mode: %d] ...\n", buf[1], spi_mode);
+		if (spi_mode == SPI_MODE_HW)
+			spi_read_blocking(spi1, 0, lbuf, buf[1]);
+		else if (spi_mode == SPI_MODE_PIO)
+			pio_spi_read8_blocking(&spi_pio, lbuf, buf[1]);
 		struct usb_endpoint_configuration *ep =
 			usb_get_endpoint_configuration(EP2_IN_ADDR);
 		usb_start_transfer(ep, lbuf, len);
 	}
 
 	if (buf[0] == MUSLI_CMD_SPI_WRITE) {
-		spi_write_blocking(spi1, buf+4, buf[1]);
+	//	printf("writing %d bytes to spi [mode: %d] ...\n", buf[1], spi_mode);
+		if (spi_mode == SPI_MODE_HW)
+			spi_write_blocking(spi1, buf+4, buf[1]);
+		else if (spi_mode == SPI_MODE_PIO)
+			pio_spi_write8_blocking(&spi_pio, buf+4, buf[1]);
+	}
+
+	if (buf[0] == MUSLI_CMD_CFG_PIO_SPI) {
+		pio_spi_cfg(buf[1], buf[2], buf[3]);
 	}
 
 	if (buf[0] == MUSLI_CMD_REBOOT) {
-		printf("rebooting ...\n", buf[1]);
+		//printf("rebooting ...\n", buf[1]);
 		watchdog_reboot(0, 0, 0);
 	}
 
@@ -659,164 +680,64 @@ void ep2_in_handler(uint8_t *buf, uint16_t len) {
 
 void init_eis(void) {
 
-	printf("init_eis\n");
+	spi_mode = SPI_MODE_HW;
 
+	//printf("init_eis\n");
+
+	// set these to inputs without pullup/pulldowns
+	gpio_init(MUSLI_SPI_CSN_PIN);
+	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+	gpio_init(MUSLI_SPI_RX_PIN);
+	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
+	gpio_init(MUSLI_SPI_TX_PIN);
+	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
+	gpio_init(MUSLI_SPI_SCK_PIN);
+	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
+
+	// these have external pull-ups
 	gpio_init(EIS_SD_SS);
-	gpio_init(EIS_SD_SCK);
-	gpio_init(EIS_SD_MISO);
-	gpio_init(EIS_SD_MOSI);
 	gpio_disable_pulls(EIS_SD_SS);
-	gpio_disable_pulls(EIS_SD_SCK);
-	gpio_disable_pulls(EIS_SD_MISO);
-	gpio_disable_pulls(EIS_SD_MOSI);
-//	gpio_set_dir(EIS_SD_SS, 1);
-//	gpio_set_dir(EIS_SD_SCK, 1);
-//	gpio_set_dir(EIS_SD_MOSI, 1);
 
 	gpio_init(ICE40_CDONE);
 	gpio_disable_pulls(ICE40_CDONE);
 
-	gpio_init(EIS_INT);
-	gpio_disable_pulls(EIS_INT);
+	gpio_init(ICE40_CRESET);
+	gpio_disable_pulls(ICE40_CDONE);
 
-/*
-	// attempt to load gateware from SD card ...
+	// set up spi master tx pio pins
 
-	printf("mounting sd card ... ");
-	fflush(stdout);
+   gpio_init(MUSLI_SCK);
+   gpio_disable_pulls(MUSLI_SCK);
+   gpio_set_dir(MUSLI_SCK, 1);
 
-	if (fs_mount() == 0)
-		printf("done.\n");
-	else
-		printf("failed.\n");
+   gpio_init(MUSLI_MOSI);
+   gpio_disable_pulls(MUSLI_MOSI);
+   gpio_set_dir(MUSLI_MOSI, 1);
 
-	int gw_size = fs_size("/GATEWARE.BIN");
-	if (gw_size) {
-		char *gw = fs_mallocfile("/GATEWARE.BIN");
-		if (gw != NULL) {
-			init_ldprog();
-			gpio_set_dir(ICE40_CRESET, 1);
-			gpio_set_dir(MUSLI_SPI_CSN_PIN, 1);
-
-			gpio_put(MUSLI_SPI_CSN_PIN, 0);
-			gpio_put(ICE40_CRESET, 0);
-			sleep_ms(10);
-
-			gpio_put(ICE40_CRESET, 1);
-			sleep_ms(10);
-
-			gpio_put(MUSLI_SPI_CSN_PIN, 1);
-			spi_write_blocking(spi1, gw, 1);
-			gpio_put(MUSLI_SPI_CSN_PIN, 0);
-			spi_write_blocking(spi1, gw, gw_size);
-			gpio_put(MUSLI_SPI_CSN_PIN, 1);
-			spi_write_blocking(spi1, gw, 14);
-
-			free(gw);
-		}
-	}
-
-//	printf("fs free: %i\n", fs_free());
-//	printf("fs total: %i\n", fs_total());
-
-//	printf("listing sd card ...\n");
-//	fs_list_dir("/");
-*/
+	gpio_set_function(MUSLI_SCK, GPIO_FUNC_PIO0);
+	gpio_set_function(MUSLI_MOSI, GPIO_FUNC_PIO0);
 
 }
 
-// this happens after fpga configuration completes (CDONE goes high)
 void init_eis_postconf(void) {
 
 	eis_fpga_configured = true;
 
-	sleep_us(500);
+	sleep_ms(100);
+
+	printf("fpga configured.\n");
+
+	sleep_ms(100);
 
 	// release CSPI bus
-	gpio_init(MUSLI_SPI_CSN_PIN);
-	gpio_init(MUSLI_SPI_TX_PIN);
-	gpio_init(MUSLI_SPI_RX_PIN);
-	gpio_init(MUSLI_SPI_SCK_PIN);
-	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
-	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
-
-
-	// set up RPMEM slave interface
-	// printf("configuring RPMEM interface ...\n");
-//   gpio_init(MUSLI_SPI_CSN_PIN);
-//   gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
-
-/*
-	gpio_set_function(MUSLI_SPI_CSN_PIN, GPIO_FUNC_SPI);
-	gpio_set_function(MUSLI_SPI_RX_PIN, GPIO_FUNC_SPI);
-	gpio_set_function(MUSLI_SPI_SCK_PIN, GPIO_FUNC_SPI);
-	gpio_set_function(MUSLI_SPI_TX_PIN, GPIO_FUNC_SPI);
-	spi_init(spi1, 1000 * 1000);
-	spi_set_slave(spi1, true);
-*/
-
-/*
-	gpio_init(MUSLI_SPI_TX_PIN);
-	gpio_init(MUSLI_SPI_RX_PIN);
-	gpio_init(MUSLI_SPI_SCK_PIN);
-	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
-	gpio_set_function(MUSLI_SPI_RX_PIN, GPIO_FUNC_PIO0);
-	gpio_set_function(MUSLI_SPI_SCK_PIN, GPIO_FUNC_PIO0);
-	gpio_set_function(MUSLI_SPI_TX_PIN, GPIO_FUNC_PIO0);
-	gpio_set_dir(MUSLI_SPI_TX_PIN, 1);
-	gpio_set_dir(MUSLI_SPI_RX_PIN, 0);
-	gpio_set_dir(MUSLI_SPI_SCK_PIN, 0);
-
-	gpio_init(EIS_INT);
-	gpio_disable_pulls(EIS_INT);
-	gpio_set_dir(EIS_INT, 1);
-	gpio_set_function(EIS_INT, GPIO_FUNC_PIO0);
-
-	gpio_init(EIS_TX);
-	gpio_disable_pulls(EIS_TX);
-	gpio_set_dir(EIS_TX, 1);
-	gpio_set_function(EIS_TX, GPIO_FUNC_PIO0);
-
-	gpio_init(EIS_HOLD);
-	gpio_disable_pulls(EIS_HOLD);
-	gpio_set_dir(EIS_HOLD, 1);
-	gpio_set_function(MUSLI_SPI_TX_PIN, GPIO_FUNC_PIO0);
-
-	printf("fpga configured, please wait ...\n");
-	sleep_ms(500);
-
-	printf("clocks:\n");
-
-	uint f_pll_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_PLL_SYS_CLKSRC_PRIMARY);
-	uint f_pll_usb = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_PLL_USB_CLKSRC_PRIMARY);
-	uint f_rosc = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_ROSC_CLKSRC);
-	uint f_clk_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);
-	uint f_clk_peri = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_PERI);
-	uint f_clk_usb = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_USB);
-	uint f_clk_adc = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_ADC);
-	uint f_clk_rtc = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_RTC);
- 
-	printf("pll_sys  = %dkHz\n", f_pll_sys);
-	printf("pll_usb  = %dkHz\n", f_pll_usb);
-	printf("rosc     = %dkHz\n", f_rosc);
-	printf("clk_sys  = %dkHz\n", f_clk_sys);
-	printf("clk_peri = %dkHz\n", f_clk_peri);
-	printf("clk_usb  = %dkHz\n", f_clk_usb);
-	printf("clk_adc  = %dkHz\n", f_clk_adc);
-	printf("clk_rtc  = %dkHz\n", f_clk_rtc);
-
-
-	// enable interrupts
-	gpio_set_irq_enabled_with_callback(MUSLI_SPI_CSN_PIN, GPIO_IRQ_EDGE_FALL, true, &gpio_int);
-	gpio_set_irq_enabled_with_callback(MUSLI_SPI_SCK_PIN, GPIO_IRQ_EDGE_RISE, true, &gpio_int);
-
-*/
-
-	printf("eis is ready.\n");
+   gpio_init(MUSLI_SPI_CSN_PIN);
+   gpio_init(MUSLI_SPI_TX_PIN);
+   gpio_init(MUSLI_SPI_RX_PIN);
+   gpio_init(MUSLI_SPI_SCK_PIN);
+   gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+   gpio_disable_pulls(MUSLI_SPI_TX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_RX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
 
 }
 
@@ -840,78 +761,115 @@ void ice40_reset(void) {
 
 void init_ldprog(void) {
 
-	printf("init_ldprog\n");
+	spi_mode = SPI_MODE_HW;
+
+	//printf("init_ldprog\n");
 
 	gpio_init(MUSLI_SPI_CSN_PIN);
 	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
-	gpio_init(MUSLI_SPI_RX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
-	gpio_init(MUSLI_SPI_TX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
-	gpio_init(MUSLI_SPI_SCK_PIN);
-	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
 
 	gpio_set_function(MUSLI_SPI_RX_PIN, GPIO_FUNC_SPI);
 	gpio_set_function(MUSLI_SPI_SCK_PIN, GPIO_FUNC_SPI);
 	gpio_set_function(MUSLI_SPI_TX_PIN, GPIO_FUNC_SPI);
 	spi_init(spi1, 1000 * 1000);
-	spi_set_slave(spi1, false);
-
-	eis_fpga_configured = false;
 
 	gpio_init(ICE40_CDONE);
 	gpio_init(ICE40_CRESET);
 	gpio_disable_pulls(ICE40_CDONE);
 	gpio_disable_pulls(ICE40_CRESET);
 
+	eis_fpga_configured = false;
+
 }
 
-char rpmem_in[8];
-char rpmem_out[8];
-int rpmem_ctr;
+void init_gpio(void) {
+	//printf("init_gpio\n");
+	spi_deinit(spi1);
+	//uart_deinit(uart0);
+	for (int i = 0; i <= 3; i++) {
+		gpio_init(i);
+		gpio_disable_pulls(i);
+	}
+	for (int i = 8; i <= 11; i++) {
+		gpio_init(i);
+		gpio_disable_pulls(i);
+	}
+}
 
-uint8_t rpt_l[8];
-uint8_t rpt_r[8];
+void init_pio_spi(void) {
 
-int rptcmp(char *a, char *b, int len) {
-	int d = 0;
-	for (int i = 0; i < len; i++) if (a[i] != b[i]) ++d;
-	return d;
+	spi_mode = SPI_MODE_PIO;
+
+	//printf("init_pio_spi\n");
+
+	for (int i = 8; i <= 11; i++) {
+		gpio_init(i);
+		gpio_disable_pulls(i);
+	}
+
+}
+
+void pio_spi_cfg(uint8_t pin_sck, uint8_t pin_mosi, uint8_t pin_miso) {
+
+	//printf("pio_spi sck %d mosi %d miso %d\n", pin_sck, pin_mosi, pin_miso);
+
+  	pio_spi_init(spi_pio.pio, spi_pio.sm, spi_pio_offset,
+		8,       // 8 bits per SPI frame
+		62.5f,   // 0.5 MHz @ 125 clk_sys
+//		31.25f,  // 1 MHz @ 125 clk_sys
+		false,   // CPHA = 0
+		false,   // CPOL = 0
+		pin_sck,
+		pin_mosi,
+		pin_miso
+	);
 }
 
 int main(void) {
 
 	// set the sys clock to 126mhz
-	set_sys_clock_khz(126000, true);
+//	set_sys_clock_khz(126000, true);
+	set_sys_clock_khz(120000, true);
 
-	stdio_init_all();
+	//uart_init(uart0, 115200);
 
-	printf("Keks initializing ...\n");
+	gpio_set_function(EIS_TX, GPIO_FUNC_UART);
+	stdio_uart_init_full(uart0, 115200, EIS_TX, -1);
 
-	printf("enable clock output ...\n");
+//	stdio_init_all();
+//	printf("Eis initializing ...\n");
+
+//	printf("enable clock output ...\n");
 	clock_gpio_init(EIS_CLKOUT, CLOCKS_CLK_GPOUT1_CTRL_AUXSRC_VALUE_CLK_USB, 1);
-	//clock_gpio_init(EIS_CLKOUT, CLOCKS_CLK_GPOUT1_CTRL_AUXSRC_VALUE_CLK_SYS, 1);
 
-	printf("usb_device_init ...\n");
+//	printf("usb_device_init ...\n");
 	usb_device_init();
 
-	printf("starting second core ...\n");
-	multicore_reset_core1();
-	multicore_launch_core1(core1_main);
-
-	init_eis();
-//	ice40_reset();
-
-	// Wait until configured
+//	printf("waiting for usb configuration ...\n");
 	while (!configured) {
 		tight_loop_contents();
 	}
 
+//   printf("initializing fpga ...\n");
+	init_eis();
+	ice40_reset();
+
+//   printf("starting second core ...\n");
+   multicore_reset_core1();
+   multicore_launch_core1(core1_main);
+
+	// spi master PIO for programming flash
+	spi_pio_offset = pio_add_program(spi_pio.pio, &spi_cpha0_program);
+
+	// spi master tx-only PIO for sending usb HID reports
+	uint offset_mtx = pio_add_program(SPI_MASTER_TX_PIO, &spi_master_tx_program);
+	spi_master_tx_program_init(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM, offset_mtx,
+		MUSLI_SCK, MUSLI_MOSI);
+
 	// Get ready to rx from host
 	usb_start_transfer(usb_get_endpoint_configuration(EP1_OUT_ADDR), NULL, 64);
 
-	bool kfc_prev = 0;
-	rpmem_ctr = 0;
+	int kfc_prev = 0;
 
 	// Everything is interrupt driven so just loop here
 	while (1) {
@@ -919,13 +877,13 @@ int main(void) {
 		tight_loop_contents();
 
 		int cdone = gpio_get(ICE40_CDONE);
-		if (cdone && cdone != kfc_prev) {
+		if (cdone && cdone != kfc_prev && !eis_fpga_configured) {
 			init_eis_postconf();
 		}
 
 		kfc_prev = cdone;
 
-		if (usb_host_device != NULL) {
+		if (eis_fpga_configured && usb_host_device != NULL) {
 
 			for (int dev_idx = 0; dev_idx < PIO_USB_DEVICE_CNT; dev_idx++) {
 				usb_device_t *device = &usb_host_device[dev_idx];
@@ -934,7 +892,6 @@ int main(void) {
 					continue;
 				}
 
-				// Print received packet to EPs
 				for (int ep_idx = 0; ep_idx < PIO_USB_DEV_EP_CNT; ep_idx++) {
 
 					endpoint_t *ep = pio_usb_get_endpoint(device, ep_idx);
@@ -946,98 +903,18 @@ int main(void) {
 					uint8_t rpt[64];
 					int len = pio_usb_get_in_data(ep, rpt, sizeof(rpt));
 
-					if (len > 0) {
-
-						rpt[2] = rpt[5];
-						rpt[3] = rpt[6];
-						rpt[4] = dev_idx;
-
-						// send the report if it's changed
-						if (dev_idx == 0 && rptcmp(rpt, rpt_l, 5)) {
-
-					//		printf("%02x %02x %02x %02x %02x\n",
-					//			rpt[0], rpt[1], rpt[2], rpt[3], rpt[4]);
-
-							pio_spi_master_write8_blocking(SPI_MASTER_TX_PIO,
-								SPI_MASTER_TX_SM, rpt, 5);
-
-						}
-
-						if (dev_idx == 1 && rptcmp(rpt, rpt_r, 5)) {
-
-					//		printf("%02x %02x %02x %02x %02x\n",
-					//			rpt[0], rpt[1], rpt[2], rpt[3], rpt[4]);
-
-							pio_spi_master_write8_blocking(SPI_MASTER_TX_PIO,
-								SPI_MASTER_TX_SM, rpt, 5);
-
-						}
-
-						if (dev_idx == 0) memcpy(rpt_l, rpt, 5);
-						if (dev_idx == 1) memcpy(rpt_r, rpt, 5);
-
-					}
-				}
-			}
-		}
-
-		if (eis_fpga_configured) {
-
-			if (!pio_sm_is_rx_fifo_empty(SPI_SLAVE_RX_PIO, SPI_SLAVE_RX_SM)) {
-
-				if (rpmem_ctr > 7) {
-					printf("rpmem overflow!\n");
-					rpmem_ctr = 0;
-				}
-
-				rpmem_in[rpmem_ctr] = pio_sm_get_blocking(SPI_SLAVE_RX_PIO,
-					SPI_SLAVE_RX_SM);
-
-				if (rpmem_ctr == 3) {
-
-					printf("got rpmem cmd %.2x adr: %.2x %.2x %.2x\n",
-						rpmem_in[0], rpmem_in[1], rpmem_in[2], rpmem_in[3] );
-
-					if (rpmem_in[0] == 0x03) {	// READ
-
-						printf("reading from %x %x %x\n",
-							rpmem_in[1], rpmem_in[2], rpmem_in[3]);
-
-						rpmem_out[0] = 0x55;
-						rpmem_out[1] = 0x66;
-						rpmem_out[2] = 0x77;
-						rpmem_out[3] = 0x88;
-
-						pio_spi_slave_write8_blocking(SPI_SLAVE_TX_PIO,
-							SPI_SLAVE_TX_SM, rpmem_out, 4);
-
-					}
-
-					gpio_put(EIS_HOLD, 0);	// disable read hold
-
-				}
-
-				if (rpmem_ctr == 7) {
-
-					if (rpmem_in[0] == 0x02) {	// WRITE
-
-						printf("writing: %x %x %x %x to %x %x %x\n",
-							rpmem_in[4], rpmem_in[5], rpmem_in[6], rpmem_in[7],
-							rpmem_in[1], rpmem_in[2], rpmem_in[3]);
-
-					}
-
-					rpmem_ctr = 0;
-
-				} else {
-
-					++rpmem_ctr;
+					if (len > 0)
+						process_kbd_report( (hid_keyboard_report_t const*) rpt);
 
 				}
 
 			}
 
+
 		}
+
+//		printf("hello!\n");
+//		sleep_ms(100);
 
 	}
 
@@ -1045,61 +922,23 @@ int main(void) {
 
 }
 
-// SPI slave interface
 
+void core1_main(void) {
 
-void gpio_int(uint gpio, uint32_t events) {
+	sleep_ms(10);
 
-	if ((events & GPIO_IRQ_EDGE_FALL) == GPIO_IRQ_EDGE_FALL) {
+	// To run USB SOF interrupt in core1, create alarm pool in core1.
+	static pio_usb_configuration_t config = PIO_USB_DEFAULT_CONFIG;
+	config.alarm_pool = (void*)alarm_pool_create(2, 1);
+	usb_host_device = pio_usb_host_init(&config);
 
-//		printf("gpio_int: %i\n", gpio);
-
-		if (gpio == MUSLI_SPI_CSN_PIN) {
-//			printf("gpio_fall: cspi_ss\n");
-			rpmem_ctr = 0;
-			gpio_put(EIS_HOLD, 1);	// enable read hold
- 			pio_sm_restart(SPI_SLAVE_RX_PIO, SPI_SLAVE_RX_SM);
- 			pio_sm_restart(SPI_SLAVE_TX_PIO, SPI_SLAVE_TX_SM);
-		}
-
+	while (true) {
+		pio_usb_host_task();
 	}
-}
-
-// use the second core for the USB host controller
-
-void core1_main() {
-
-   sleep_ms(10);
-
-   // To run USB SOF interrupt in core1, create alarm pool in core1.
-   static pio_usb_configuration_t config = PIO_USB_DEFAULT_CONFIG;
-   config.alarm_pool = (void*)alarm_pool_create(2, 1);
-   usb_host_device = pio_usb_host_init(&config);
-
-   // Call pio_usb_host_add_port to use multi port
-   const uint8_t pin_dp2 = 13;
-   pio_usb_host_add_port(pin_dp2);
-
-	// set up SPI slave PIO state machines
-	uint offset_rx = pio_add_program(SPI_SLAVE_RX_PIO, &spi_slave_rx_program);
-	spi_slave_rx_program_init(SPI_SLAVE_RX_PIO, SPI_SLAVE_RX_SM, offset_rx,
-		MUSLI_SPI_SCK_PIN, MUSLI_SPI_RX_PIN);
-
-	uint offset_tx = pio_add_program(SPI_SLAVE_TX_PIO, &spi_slave_tx_program);
-	spi_slave_tx_program_init(SPI_SLAVE_TX_PIO, SPI_SLAVE_TX_SM, offset_tx,
-		MUSLI_SPI_SCK_PIN, MUSLI_SPI_TX_PIN);
-
-	uint offset_mtx = pio_add_program(SPI_MASTER_TX_PIO, &spi_master_tx_program);
-	spi_master_tx_program_init(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM, offset_mtx,
-		EIS_INT, EIS_TX);
-
-   while (true) {
-      pio_usb_host_task();
-   }
 
 }
 
-void __time_critical_func(pio_spi_slave_write8_blocking)(PIO pio, uint sm, const uint8_t *src, size_t len) {
+void __time_critical_func(pio_spi_master_tx_write8_blocking)(PIO pio, uint sm, const uint8_t *src, size_t len) {
     size_t tx_remain = len;
     // Do 8 bit accesses on FIFO, so that write data is byte-replicated. This
     // gets us the left-justification for free (for MSB-first shift-out)
@@ -1112,15 +951,69 @@ void __time_critical_func(pio_spi_slave_write8_blocking)(PIO pio, uint sm, const
     }
 }
 
-void __time_critical_func(pio_spi_master_write8_blocking)(PIO pio, uint sm, const uint8_t *src, size_t len) {
-    size_t tx_remain = len;
-    // Do 8 bit accesses on FIFO, so that write data is byte-replicated. This
-    // gets us the left-justification for free (for MSB-first shift-out)
-    io_rw_8 *txfifo = (io_rw_8 *) &pio->txf[sm];
-    while (tx_remain) {
-        if (tx_remain && !pio_sm_is_tx_fifo_full(pio, sm)) {
-            *txfifo = *src++;
-            --tx_remain;
-        }
-    }
+// usb keyboard
+
+static inline bool find_key_in_report(hid_keyboard_report_t const *report, uint8_t keycode)
+{
+  for(uint8_t i=0; i<6; i++)
+  { 
+    if (report->keycode[i] == keycode)  return true;
+  }
+
+  return false;
 }
+
+static void process_kbd_report(hid_keyboard_report_t const *report)
+{
+  static hid_keyboard_report_t prev_report = { 0, 0, {0} }; // previous report to check key released
+  static bool prev_shift = false;
+
+  bool const is_shift = report->modifier & (KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT);
+
+  if (is_shift && !prev_shift)
+    spi_send_scancode(0x12);
+  
+  if (!is_shift && prev_shift) {
+    spi_send_scancode(0xf0);
+    spi_send_scancode(0x12);
+  }
+  
+  prev_shift = is_shift;
+  
+  // TODO: send other release scancodes (not currently used by ZBL/LIX)
+  for(uint8_t i=0; i<6; i++)
+  { 
+    if ( report->keycode[i] )
+    {
+      if ( find_key_in_report(&prev_report, report->keycode[i]) )
+      {
+        // exist in previous report means the current key is holding
+      }else
+      {
+        // send scancode over SPI
+        spi_send_scancode(keycode2scancode[report->keycode[i]]);
+      }
+    }
+  }
+
+  prev_report = *report;
+}
+
+
+void spi_send_scancode(uint8_t code) {
+
+   uint8_t buf[1];
+
+   printf("[%.2x]\n", code);
+
+   buf[0] = code;
+
+//	gpio_put(MUSLI_SS, 0);
+	pio_spi_master_tx_write8_blocking(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM,
+		buf, 1);
+//	while (!pio_sm_is_tx_fifo_empty(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM));
+//	sleep_ms(10);
+//	gpio_put(MUSLI_SS, 1);
+
+}
+
