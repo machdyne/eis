@@ -90,7 +90,7 @@ void ep2_in_handler(uint8_t *buf, uint16_t len);
 // Global device address
 static bool should_set_address = false;
 static uint8_t dev_addr = 0;
-static volatile bool configured = false;
+static volatile bool usb_configured = false;
 
 // Global data buffer for EP0
 static uint8_t ep0_buf[64];
@@ -368,7 +368,7 @@ void usb_bus_reset(void) {
     dev_addr = 0;
     should_set_address = false;
     usb_hw->dev_addr_ctrl = 0;
-    configured = false;
+    usb_configured = false;
 }
 
 /**
@@ -425,7 +425,7 @@ void usb_set_device_configuration(volatile struct usb_setup_packet *pkt) {
     // Only one configuration so just acknowledge the request
     //printf("Device Enumerated\r\n");
     usb_acknowledge_out_request();
-    configured = true;
+    usb_configured = true;
 }
 
 /**
@@ -815,8 +815,7 @@ void pio_spi_cfg(uint8_t pin_sck, uint8_t pin_mosi, uint8_t pin_miso) {
 
   	pio_spi_init(spi_pio.pio, spi_pio.sm, spi_pio_offset,
 		8,       // 8 bits per SPI frame
-		62.5f,   // 0.5 MHz @ 125 clk_sys
-//		31.25f,  // 1 MHz @ 125 clk_sys
+		31.25f,  // 1 MHz @ 125 clk_sys
 		false,   // CPHA = 0
 		false,   // CPOL = 0
 		pin_sck,
@@ -842,14 +841,6 @@ int main(void) {
 //	printf("enable clock output ...\n");
 	clock_gpio_init(EIS_CLKOUT, CLOCKS_CLK_GPOUT1_CTRL_AUXSRC_VALUE_CLK_USB, 1);
 
-//	printf("usb_device_init ...\n");
-	usb_device_init();
-
-//	printf("waiting for usb configuration ...\n");
-	while (!configured) {
-		tight_loop_contents();
-	}
-
 //   printf("initializing fpga ...\n");
 	init_eis();
 	ice40_reset();
@@ -869,6 +860,15 @@ int main(void) {
 	// Get ready to rx from host
 	usb_start_transfer(usb_get_endpoint_configuration(EP1_OUT_ADDR), NULL, 64);
 
+
+//	printf("usb_device_init ...\n");
+	usb_device_init();
+
+//	printf("waiting for usb configuration ...\n");
+//	while (!configured) {
+//		tight_loop_contents();
+//	}
+
 	int kfc_prev = 0;
 
 	// Everything is interrupt driven so just loop here
@@ -880,7 +880,6 @@ int main(void) {
 		if (cdone && cdone != kfc_prev && !eis_fpga_configured) {
 			init_eis_postconf();
 		}
-
 		kfc_prev = cdone;
 
 		if (eis_fpga_configured && usb_host_device != NULL) {
@@ -1008,12 +1007,8 @@ void spi_send_scancode(uint8_t code) {
 
    buf[0] = code;
 
-//	gpio_put(MUSLI_SS, 0);
 	pio_spi_master_tx_write8_blocking(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM,
 		buf, 1);
-//	while (!pio_sm_is_tx_fifo_empty(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM));
-//	sleep_ms(10);
-//	gpio_put(MUSLI_SS, 1);
 
 }
 
