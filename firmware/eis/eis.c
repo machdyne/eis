@@ -857,22 +857,20 @@ int main(void) {
 	spi_master_tx_program_init(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM, offset_mtx,
 		MUSLI_SCK, MUSLI_MOSI);
 
-	// Get ready to rx from host
-	usb_start_transfer(usb_get_endpoint_configuration(EP1_OUT_ADDR), NULL, 64);
-
-
-//	printf("usb_device_init ...\n");
+	printf("usb_device_init ...\n");
 	usb_device_init();
 
-//	printf("waiting for usb configuration ...\n");
-//	while (!configured) {
-//		tight_loop_contents();
-//	}
-
 	int kfc_prev = 0;
+	int usb_started = 0;
 
 	// Everything is interrupt driven so just loop here
 	while (1) {
+
+		if (usb_configured && !usb_started) {
+			usb_start_transfer(usb_get_endpoint_configuration(EP1_OUT_ADDR),
+				NULL, 64);
+			usb_started = 1;
+		}
 
 		tight_loop_contents();
 
