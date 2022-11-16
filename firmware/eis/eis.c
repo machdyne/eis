@@ -27,7 +27,7 @@
 
 #include "pio_spi.h"
 #include "pio_usb.h"
-#include "tusb.h"
+#include "eis_tinyusb.h"
 #include "spi_master_tx.pio.h"
 #include "eis.h"
 #include "keycode2scancode.h"

@@ -29,6 +29,6 @@ pico_sdk_init()
 pico_generate_pio_header(eis ${CMAKE_CURRENT_LIST_DIR}/spi.pio)
 pico_generate_pio_header(eis ${CMAKE_CURRENT_LIST_DIR}/spi_master_tx.pio)
 
-target_link_libraries(eis PRIVATE pico_stdlib hardware_resets hardware_uart hardware_irq hardware_spi hardware_pio pico_multicore hardware_dma tinyusb_host)
+target_link_libraries(eis PRIVATE pico_stdlib hardware_resets hardware_uart hardware_irq hardware_spi hardware_pio pico_multicore hardware_dma)
 
 pico_add_extra_outputs(eis)
