@@ -12,6 +12,9 @@ set(PICO_PIO_USB_SRC "${CMAKE_CURRENT_LIST_DIR}/pico-pio-usb")
 
 target_sources(eis PUBLIC
 	${CMAKE_CURRENT_LIST_DIR}/eis.c
+   ${CMAKE_CURRENT_LIST_DIR}/fs/fs.c
+   ${CMAKE_CURRENT_LIST_DIR}/fs/fatfs/ff.c
+   ${CMAKE_CURRENT_LIST_DIR}/fs/fatfs/sdmm.c
 	${CMAKE_CURRENT_LIST_DIR}/pio_spi.c
 	${PICO_PIO_USB_SRC}/pio_usb.c
 	${PICO_PIO_USB_SRC}/pio_usb_device.c
@@ -21,6 +24,8 @@ target_sources(eis PUBLIC
 
 target_include_directories(eis PUBLIC
    ${CMAKE_CURRENT_LIST_DIR}
+   ${CMAKE_CURRENT_LIST_DIR}/fs
+   ${CMAKE_CURRENT_LIST_DIR}/fs/fatfs
    ${PICO_PIO_USB_SRC}
    )
 

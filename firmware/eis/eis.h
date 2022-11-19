@@ -44,9 +44,9 @@
 #define MUSLI_SCK EIS_INT
 #define MUSLI_MOSI EIS_RX
 
-#define EIS_SD_SCK   26
-#define EIS_SD_MISO  24
-#define EIS_SD_MOSI  27
+#define EIS_SD_SCK   MUSLI_SPI_SCK_PIN
+#define EIS_SD_MISO  MUSLI_SPI_TX_PIN
+#define EIS_SD_MOSI  MUSLI_SPI_RX_PIN
 #define EIS_SD_SS    5
 
 #define SPI_MODE_HW 1

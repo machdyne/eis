@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <strings.h>
 
 // Pico
@@ -31,6 +32,7 @@
 #include "spi_master_tx.pio.h"
 #include "eis.h"
 #include "keycode2scancode.h"
+#include "fs.h"
 
 uint8_t spi_mode = SPI_MODE_HW;
 
@@ -41,6 +43,7 @@ void init_gpio(void);
 void init_pio_spi(void);
 void init_eis(void);
 void init_eis_postconf(void);
+void ice40_reset(void);
 void pio_spi_cfg(uint8_t pin_sck, uint8_t pin_mosi, uint8_t pin_miso);
 
 static usb_device_t *usb_host_device = NULL;
@@ -682,30 +685,16 @@ void init_eis(void) {
 
 	spi_mode = SPI_MODE_HW;
 
-	//printf("init_eis\n");
-
-	// set these to inputs without pullup/pulldowns
-	gpio_init(MUSLI_SPI_CSN_PIN);
-	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
-	gpio_init(MUSLI_SPI_RX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
-	gpio_init(MUSLI_SPI_TX_PIN);
-	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
-	gpio_init(MUSLI_SPI_SCK_PIN);
-	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
+	printf("init_eis\n");
 
 	// these have external pull-ups
-	gpio_init(EIS_SD_SS);
-	gpio_disable_pulls(EIS_SD_SS);
-
 	gpio_init(ICE40_CDONE);
 	gpio_disable_pulls(ICE40_CDONE);
 
 	gpio_init(ICE40_CRESET);
-	gpio_disable_pulls(ICE40_CDONE);
+	gpio_disable_pulls(ICE40_CRESET);
 
-	// set up spi master tx pio pins
-
+	// set up spi master tx pio pins (used to transmit keyboard data)
    gpio_init(MUSLI_SCK);
    gpio_disable_pulls(MUSLI_SCK);
    gpio_set_dir(MUSLI_SCK, 1);
@@ -716,6 +705,69 @@ void init_eis(void) {
 
 	gpio_set_function(MUSLI_SCK, GPIO_FUNC_PIO0);
 	gpio_set_function(MUSLI_MOSI, GPIO_FUNC_PIO0);
+
+	// attempt to load gateware from SD card
+	gpio_init(MUSLI_SPI_CSN_PIN);
+	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+	gpio_init(MUSLI_SPI_RX_PIN);
+	gpio_disable_pulls(MUSLI_SPI_RX_PIN);
+	gpio_init(MUSLI_SPI_TX_PIN);
+	gpio_disable_pulls(MUSLI_SPI_TX_PIN);
+	gpio_init(MUSLI_SPI_SCK_PIN);
+	gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
+
+	gpio_init(EIS_SD_SS);
+	gpio_disable_pulls(EIS_SD_SS);
+
+	gpio_set_dir(EIS_SD_SS, 1);
+	gpio_set_dir(EIS_SD_MOSI, 1);
+	gpio_set_dir(EIS_SD_SCK, 1);
+
+	gpio_set_dir(MUSLI_SPI_CSN_PIN, 1);
+	gpio_set_dir(ICE40_CRESET, 1);
+
+	gpio_put(MUSLI_SPI_CSN_PIN, 1);
+	gpio_put(ICE40_CRESET, 0);
+
+	printf("mounting sd card ... ");
+	fflush(stdout);
+
+	if (fs_mount() == 0)
+		printf("done.\n");
+	else
+		printf("failed.\n");
+
+	int gw_size = fs_size("/GATEWARE.BIN");
+	if (gw_size) {
+		char *gw = fs_mallocfile("/GATEWARE.BIN");
+		if (gw != NULL) {
+         init_ldprog();
+         gpio_set_dir(ICE40_CRESET, 1);
+         gpio_set_dir(MUSLI_SPI_CSN_PIN, 1);
+
+         gpio_put(MUSLI_SPI_CSN_PIN, 0);
+         gpio_put(ICE40_CRESET, 0);
+         sleep_ms(10);
+
+         gpio_put(ICE40_CRESET, 1);
+         sleep_ms(10);
+
+			gpio_put(MUSLI_SPI_CSN_PIN, 1);
+			spi_write_blocking(spi1, gw, 1);
+			gpio_put(MUSLI_SPI_CSN_PIN, 0);
+			spi_write_blocking(spi1, gw, gw_size);
+			gpio_put(MUSLI_SPI_CSN_PIN, 1);
+			spi_write_blocking(spi1, gw, 14);
+
+			free(gw);
+		} else {
+			// config from SD failed; attempt to load gateware from flash
+			ice40_reset();
+		}
+	} else {
+		// config from SD failed; attempt to load gateware from flash
+		ice40_reset();
+	}
 
 }
 
@@ -743,6 +795,16 @@ void init_eis_postconf(void) {
 
 void ice40_reset(void) {
 
+	// release CSPI bus
+   gpio_init(MUSLI_SPI_CSN_PIN);
+   gpio_init(MUSLI_SPI_TX_PIN);
+   gpio_init(MUSLI_SPI_RX_PIN);
+   gpio_init(MUSLI_SPI_SCK_PIN);
+   gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+   gpio_disable_pulls(MUSLI_SPI_TX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_RX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
+
 	// pull CRESET low
 	gpio_init(ICE40_CRESET);
 	gpio_disable_pulls(ICE40_CRESET);
@@ -763,10 +825,16 @@ void init_ldprog(void) {
 
 	spi_mode = SPI_MODE_HW;
 
-	//printf("init_ldprog\n");
+	printf("init_ldprog\n");
 
-	gpio_init(MUSLI_SPI_CSN_PIN);
-	gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+   gpio_init(MUSLI_SPI_CSN_PIN);
+   gpio_disable_pulls(MUSLI_SPI_CSN_PIN);
+   gpio_init(MUSLI_SPI_RX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_RX_PIN);
+   gpio_init(MUSLI_SPI_TX_PIN);
+   gpio_disable_pulls(MUSLI_SPI_TX_PIN);
+   gpio_init(MUSLI_SPI_SCK_PIN);
+   gpio_disable_pulls(MUSLI_SPI_SCK_PIN);
 
 	gpio_set_function(MUSLI_SPI_RX_PIN, GPIO_FUNC_SPI);
 	gpio_set_function(MUSLI_SPI_SCK_PIN, GPIO_FUNC_SPI);
@@ -826,24 +894,17 @@ void pio_spi_cfg(uint8_t pin_sck, uint8_t pin_mosi, uint8_t pin_miso) {
 
 int main(void) {
 
-	// set the sys clock to 126mhz
-//	set_sys_clock_khz(126000, true);
+	// set the sys clock to 120mhz
 	set_sys_clock_khz(120000, true);
-
-	//uart_init(uart0, 115200);
 
 	gpio_set_function(EIS_TX, GPIO_FUNC_UART);
 	stdio_uart_init_full(uart0, 115200, EIS_TX, -1);
 
-//	stdio_init_all();
-//	printf("Eis initializing ...\n");
-
-//	printf("enable clock output ...\n");
+//	printf("enable 48MHz clock output ...\n");
 	clock_gpio_init(EIS_CLKOUT, CLOCKS_CLK_GPOUT1_CTRL_AUXSRC_VALUE_CLK_USB, 1);
 
 //   printf("initializing fpga ...\n");
 	init_eis();
-	ice40_reset();
 
 //   printf("starting second core ...\n");
    multicore_reset_core1();
@@ -857,7 +918,7 @@ int main(void) {
 	spi_master_tx_program_init(SPI_MASTER_TX_PIO, SPI_MASTER_TX_SM, offset_mtx,
 		MUSLI_SCK, MUSLI_MOSI);
 
-	printf("usb_device_init ...\n");
+//	printf("usb_device_init ...\n");
 	usb_device_init();
 
 	int kfc_prev = 0;
@@ -866,13 +927,13 @@ int main(void) {
 	// Everything is interrupt driven so just loop here
 	while (1) {
 
+		tight_loop_contents();
+
 		if (usb_configured && !usb_started) {
 			usb_start_transfer(usb_get_endpoint_configuration(EP1_OUT_ADDR),
 				NULL, 64);
 			usb_started = 1;
 		}
-
-		tight_loop_contents();
 
 		int cdone = gpio_get(ICE40_CDONE);
 		if (cdone && cdone != kfc_prev && !eis_fpga_configured) {
