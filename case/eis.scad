@@ -2,6 +2,10 @@
  * Eis Case
  * Copyright (c) 2022 Lone Dynamics Corporation. All rights reserved.
  *
+ * required hardware:
+ *  - 4 x M3 x 16mm countersunk bolts
+ *  - 4 x M3 nuts
+ *
  */
 
 $fn = 100;
